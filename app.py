@@ -2,6 +2,10 @@ import streamlit as st
 import json
 import os
 from datetime import datetime
+import openai
+
+# Set OpenAI API Key (replace with your actual key)
+openai.api_key = "sk-proj-xxxxxxxxxx"  # replace with your actual key
 
 # Create memory storage file
 LOG_FILE = "as2_memory_log.json"
@@ -16,7 +20,6 @@ with open(LOG_FILE, "r") as f:
 # UI Elements
 st.title("🟢 Alpha Sniper 2: Memory-Enabled Prompt System (Memory Build Active)")
 
-
 uploaded_file = st.file_uploader("Upload Screenshot (optional)", type=["png", "jpg", "jpeg"])
 prompt_text = st.text_area("Paste Your Macro/Sector/Stock Prompt")
 
@@ -24,16 +27,19 @@ if st.button("Submit Prompt"):
     if prompt_text.strip() == "":
         st.warning("Please enter a prompt.")
     else:
-        # Fake AI response (replace later with actual logic or GPT call)
-        ai_response = {
-            "CMP": "145.20",
-            "SL": "138.00",
-            "Conviction": 8,
-            "Explosion": "#ExplodeSoon_3to5D",
-            "Sector Tag": "Energy Midcap",
-            "Macro Bias": "🟢 Bull Confirmed",
-            "Commentary": "Strong OBV base, sector in surge zone, safe to initiate small tranche."
-        }
+        # Real GPT-4 powered response
+        try:
+            response = openai.ChatCompletion.create(
+                model="gpt-4",
+                messages=[
+                    {"role": "system", "content": "You are a sniper-grade stock analysis assistant. Respond with JSON containing CMP, SL, Conviction (1-10), Explosion timing tag, Sector Tag, Macro Bias, and a Commentary."},
+                    {"role": "user", "content": prompt_text}
+                ]
+            )
+            ai_response = json.loads(response['choices'][0]['message']['content'])
+        except Exception as e:
+            st.error(f"GPT error: {e}")
+            ai_response = {}
 
         # Store log
         log_entry = {
