@@ -1,0 +1,8 @@
+
+streamlit
+pandas
+numpy
+openpyxl
+pytesseract
+Pillow
+pyngrok
