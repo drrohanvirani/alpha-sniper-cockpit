@@ -1,69 +1,59 @@
-
 import streamlit as st
-import pandas as pd
-import numpy as np
-import pytesseract
-from PIL import Image
 import json
 import os
 from datetime import datetime
-from io import BytesIO
 
-st.set_page_config(layout="wide")
-st.title("📊 Alpha Sniper 2 Cockpit")
+# Create memory storage file
+LOG_FILE = "as2_memory_log.json"
+if not os.path.exists(LOG_FILE):
+    with open(LOG_FILE, "w") as f:
+        json.dump([], f)
 
-# === Sidebar Memory Loader ===
-st.sidebar.header("📁 Session Manager")
-memory_files = [f for f in os.listdir() if f.startswith("analysis_memory_") and f.endswith(".json")]
-selected_memory = st.sidebar.selectbox("Load Past Memory", [""] + sorted(memory_files, reverse=True))
+# Load past memory
+with open(LOG_FILE, "r") as f:
+    memory = json.load(f)
 
-analysis_memory = {}
-if selected_memory:
-    with open(selected_memory, "r") as f:
-        analysis_memory = json.load(f)
-        st.sidebar.success(f"Loaded: {selected_memory}")
+# UI Elements
+st.title("Alpha Sniper 2: Memory-Enabled Prompt System")
 
-# === OCR Upload ===
-st.subheader("🖼️ Upload Screenshot (OCR)")
-image_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
-if image_file:
-    image = Image.open(image_file)
-    st.image(image, caption="Uploaded Screenshot", use_column_width=True)
-    text = pytesseract.image_to_string(image)
-    st.text_area("🔍 Extracted Text", text, height=200)
+uploaded_file = st.file_uploader("Upload Screenshot (optional)", type=["png", "jpg", "jpeg"])
+prompt_text = st.text_area("Paste Your Macro/Sector/Stock Prompt")
 
-    # Save OCR result to memory
-    analysis_memory['ocr'] = {
-        'text': text,
-        'filename': image_file.name,
-        'timestamp': str(datetime.now())
-    }
+if st.button("Submit Prompt"):
+    if prompt_text.strip() == "":
+        st.warning("Please enter a prompt.")
+    else:
+        # Fake AI response (replace later with actual logic or GPT call)
+        ai_response = {
+            "CMP": "145.20",
+            "SL": "138.00",
+            "Conviction": 8,
+            "Explosion": "#ExplodeSoon_3to5D",
+            "Sector Tag": "Energy Midcap",
+            "Macro Bias": "🟢 Bull Confirmed",
+            "Commentary": "Strong OBV base, sector in surge zone, safe to initiate small tranche."
+        }
 
-# === Excel Upload ===
-st.subheader("📈 Upload Excel (ProSetups)")
-excel_file = st.file_uploader("Upload Excel", type=["xlsx"])
-if excel_file:
-    df = pd.read_excel(excel_file, sheet_name=0)
-    st.dataframe(df)
-    analysis_memory['excel'] = {
-        'filename': excel_file.name,
-        'timestamp': str(datetime.now()),
-        'columns': df.columns.tolist()
-    }
+        # Store log
+        log_entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "prompt": prompt_text,
+            "response": ai_response,
+            "image": uploaded_file.name if uploaded_file else None
+        }
+        memory.append(log_entry)
+        with open(LOG_FILE, "w") as f:
+            json.dump(memory, f, indent=2)
 
-# === Leaderboard (Conviction Stub) ===
-st.subheader("🏆 Sniper Leaderboard (Prototype)")
-placeholder_data = [
-    {"symbol": "NSE:BAJAJINDEF", "score": 9, "tags": ["#HVY", "#OBVThrust"]},
-    {"symbol": "NSE:SUNFLAG", "score": 8.5, "tags": ["#ExplodeLikely_1to2D"]},
-]
-for row in placeholder_data:
-    st.markdown(f"- **{row['symbol']}** | Score: `{row['score']}` | Tags: {' '.join(row['tags'])}")
+        st.success("Prompt submitted and saved!")
+        st.json(ai_response)
 
-# === Save to Memory Button ===
-if st.button("💾 Save Memory Snapshot"):
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fn = f"analysis_memory_{ts}.json"
-    with open(fn, "w") as f:
-        json.dump(analysis_memory, f, indent=2)
-    st.success(f"Saved to {fn}")
+# View past entries
+with st.expander("📜 View Prompt History"):
+    for entry in reversed(memory[-10:]):
+        st.markdown(f"**{entry['timestamp']}**")
+        st.markdown(f"*Prompt:* {entry['prompt']}")
+        st.json(entry['response'])
+        if entry['image']:
+            st.markdown(f"Image: {entry['image']}")
+        st.markdown("---")
