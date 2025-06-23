@@ -14,7 +14,8 @@ with open(LOG_FILE, "r") as f:
     memory = json.load(f)
 
 # UI Elements
-st.title("Alpha Sniper 2: Memory-Enabled Prompt System")
+st.title("🟢 Alpha Sniper 2: Memory-Enabled Prompt System (Memory Build Active)")
+
 
 uploaded_file = st.file_uploader("Upload Screenshot (optional)", type=["png", "jpg", "jpeg"])
 prompt_text = st.text_area("Paste Your Macro/Sector/Stock Prompt")
