@@ -1,21 +1,33 @@
+# Practice Guru Copilot — Free Standalone Starter
 
-# Alpha Sniper 2: Cockpit Deployment
+A lightweight Streamlit app for dentists to ask **practice-management** questions using your own uploaded curriculum/guidelines.
 
-## 🚀 Usage
+## What this app does
 
-### Option A: Run Locally
+- Runs locally with **no API key required**.
+- Lets you upload `.txt`, `.md`, and `.csv` knowledge files.
+- Answers in a structured format: **Diagnose → Actions → Example → Micro Tracker**.
+- Includes safety guardrails to avoid clinical/medical advice.
+
+## Quick start
+
 1. Install dependencies:
-   ```
+   ```bash
    pip install -r requirements.txt
    ```
-2. Launch the app:
-   ```
+2. Run the app:
+   ```bash
    streamlit run app.py
    ```
+3. Open the shown local URL in your browser.
 
-### Option B: Host on Streamlit Cloud
-1. Upload this repo to GitHub
-2. Go to [Streamlit Cloud](https://streamlit.io/cloud)
-3. Deploy your repo and get a permanent URL
+## Usage
 
-Enjoy zero-prompt Alpha Sniper cockpit automation.
+1. In the sidebar, upload your Module content/guidelines and click **Update knowledge**.
+2. Ask practice-management questions in the main panel.
+3. Review response + top matched knowledge snippets.
+
+## Notes
+
+- This starter is intentionally simple and free.
+- For 500+ users, move to hosted infrastructure with auth, logging, and model/API scaling.

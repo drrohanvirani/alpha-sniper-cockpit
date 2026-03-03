@@ -1,9 +1,1 @@
-openai==0.28
-
 streamlit
-pandas
-numpy
-openpyxl
-pytesseract
-Pillow
-pyngrok
