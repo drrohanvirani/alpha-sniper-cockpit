@@ -30,21 +30,51 @@ if not vid:
     vid=m.group(1) if m else None
 if not vid:
     raise SystemExit('Could not find YouTube video id')
-t=YouTubeTranscriptApi().fetch(vid)
-print('\n'.join(x.text for x in t))
+api=YouTubeTranscriptApi()
+items=list(api.list(vid))
+if not items:
+    raise SystemExit('No transcript is available for this video')
+# Preference: English, then Hindi, then any manual transcript, then any available transcript.
+def score(t):
+    code=(getattr(t,'language_code','') or '').lower()
+    generated=bool(getattr(t,'is_generated',False))
+    if code.startswith('en') and not generated: return 0
+    if code.startswith('en'): return 1
+    if code.startswith('hi') and not generated: return 2
+    if code.startswith('hi'): return 3
+    if not generated: return 4
+    return 5
+chosen=sorted(items,key=score)[0]
+lang=getattr(chosen,'language_code','unknown') or 'unknown'
+fetched=chosen.fetch()
+text='\n'.join(x.text for x in fetched).strip()
+if not text:
+    raise SystemExit('Transcript was empty')
+print('__ALPHA_LANG__='+lang)
+print(text)
 '@
 
 $tmpPy = Join-Path $env:TEMP 'alpha_scout_youtube.py'
 Set-Content -Path $tmpPy -Value $py -Encoding UTF8
-$text = (& python $tmpPy $url | Out-String).Trim()
+$raw = (& python $tmpPy $url | Out-String).Trim()
 Remove-Item $tmpPy -ErrorAction SilentlyContinue
+if ([string]::IsNullOrWhiteSpace($raw)) { throw 'Transcript was empty.' }
+$lines = $raw -split "`r?`n"
+$language = 'unknown'
+if ($lines.Count -gt 0 -and $lines[0] -like '__ALPHA_LANG__=*') {
+  $language = $lines[0].Substring('__ALPHA_LANG__='.Length)
+  $text = ($lines | Select-Object -Skip 1) -join "`n"
+} else {
+  $text = $raw
+}
 if ([string]::IsNullOrWhiteSpace($text)) { throw 'Transcript was empty.' }
+Write-Host ('Transcript language: ' + $language)
 
 $body = @{
   device_id = $env:COMPUTERNAME
   kind = 'YOUTUBE_TRANSCRIPT'
   source_url = $url
-  title = ''
+  title = ('YouTube transcript [' + $language + ']')
   text = $text
 } | ConvertTo-Json -Depth 4
 
@@ -59,6 +89,7 @@ Write-Host ''
 if ($result.ok) {
   Write-Host 'SUCCESS - SENT TO ALPHA'
   Write-Host ('Status: ' + $result.status)
+  Write-Host ('Language: ' + $language)
   Write-Host ('Characters: ' + $result.char_count)
   Write-Host ('Event ID: ' + $result.event_id)
 } else {
