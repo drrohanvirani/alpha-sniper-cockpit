@@ -18,7 +18,10 @@ $py = @'
 import sys,re
 from urllib.parse import urlparse,parse_qs
 from youtube_transcript_api import YouTubeTranscriptApi
+
 u=sys.argv[1].strip()
+out_path=sys.argv[2]
+meta_path=sys.argv[3]
 vid=None
 if 'youtu.be/' in u:
     vid=urlparse(u).path.strip('/').split('/')[0]
@@ -30,10 +33,12 @@ if not vid:
     vid=m.group(1) if m else None
 if not vid:
     raise SystemExit('Could not find YouTube video id')
+
 api=YouTubeTranscriptApi()
 items=list(api.list(vid))
 if not items:
     raise SystemExit('No transcript is available for this video')
+
 # Preference: English, then Hindi, then any manual transcript, then any available transcript.
 def score(t):
     code=(getattr(t,'language_code','') or '').lower()
@@ -44,30 +49,38 @@ def score(t):
     if code.startswith('hi'): return 3
     if not generated: return 4
     return 5
+
 chosen=sorted(items,key=score)[0]
 lang=getattr(chosen,'language_code','unknown') or 'unknown'
 fetched=chosen.fetch()
 text='\n'.join(x.text for x in fetched).strip()
 if not text:
     raise SystemExit('Transcript was empty')
-print('__ALPHA_LANG__='+lang)
-print(text)
+
+# Write UTF-8 files instead of printing transcript to the Windows console.
+# This avoids cp1252/Unicode errors for Hindi and other languages.
+with open(out_path,'w',encoding='utf-8',newline='\n') as f:
+    f.write(text)
+with open(meta_path,'w',encoding='utf-8') as f:
+    f.write(lang)
 '@
 
 $tmpPy = Join-Path $env:TEMP 'alpha_scout_youtube.py'
+$tmpTranscript = Join-Path $env:TEMP ('alpha_scout_transcript_' + [guid]::NewGuid().ToString('N') + '.txt')
+$tmpMeta = Join-Path $env:TEMP ('alpha_scout_meta_' + [guid]::NewGuid().ToString('N') + '.txt')
 Set-Content -Path $tmpPy -Value $py -Encoding UTF8
-$raw = (& python $tmpPy $url | Out-String).Trim()
-Remove-Item $tmpPy -ErrorAction SilentlyContinue
-if ([string]::IsNullOrWhiteSpace($raw)) { throw 'Transcript was empty.' }
-$lines = $raw -split "`r?`n"
-$language = 'unknown'
-if ($lines.Count -gt 0 -and $lines[0] -like '__ALPHA_LANG__=*') {
-  $language = $lines[0].Substring('__ALPHA_LANG__='.Length)
-  $text = ($lines | Select-Object -Skip 1) -join "`n"
-} else {
-  $text = $raw
+
+& python $tmpPy $url $tmpTranscript $tmpMeta
+if ($LASTEXITCODE -ne 0) {
+  Remove-Item $tmpPy,$tmpTranscript,$tmpMeta -ErrorAction SilentlyContinue
+  throw 'Could not retrieve transcript.'
 }
+
+$text = (Get-Content $tmpTranscript -Raw -Encoding UTF8).Trim()
+$language = (Get-Content $tmpMeta -Raw -Encoding UTF8).Trim()
+Remove-Item $tmpPy,$tmpTranscript,$tmpMeta -ErrorAction SilentlyContinue
 if ([string]::IsNullOrWhiteSpace($text)) { throw 'Transcript was empty.' }
+if ([string]::IsNullOrWhiteSpace($language)) { $language = 'unknown' }
 Write-Host ('Transcript language: ' + $language)
 
 $body = @{
@@ -77,13 +90,14 @@ $body = @{
   title = ('YouTube transcript [' + $language + ']')
   text = $text
 } | ConvertTo-Json -Depth 4
+$bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
 
 Write-Host 'Sending to Alpha...'
 $result = Invoke-RestMethod -Method Post `
   -Uri 'https://rclbninptekxitkdtmrs.supabase.co/functions/v1/alpha-local-ingest' `
   -Headers @{ 'x-alpha-scout-token' = $token } `
-  -ContentType 'application/json' `
-  -Body $body
+  -ContentType 'application/json; charset=utf-8' `
+  -Body $bodyBytes
 
 Write-Host ''
 if ($result.ok) {
