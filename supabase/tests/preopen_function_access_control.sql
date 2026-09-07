@@ -54,14 +54,14 @@ FROM pg_proc p
 WHERE oid <> 'public.alpha_lock_capital_owner_preopen()'::regprocedure;
 
 -- Include the checked-in migration, not a duplicated imitation of its SQL.
-\ir ../migrations/20260907141704_preopen_function_access_control.sql
+\ir ../migrations/20260907143201_preopen_function_access_control.sql
 
 CREATE TEMP TABLE preopen_acl_after_first ON COMMIT DROP AS
 SELECT oid, proacl FROM pg_proc
 WHERE oid = 'public.alpha_lock_capital_owner_preopen()'::regprocedure;
 
 -- Reapplying the access-only migration must leave the same permissions.
-\ir ../migrations/20260907141704_preopen_function_access_control.sql
+\ir ../migrations/20260907143201_preopen_function_access_control.sql
 
 DO $assertions$
 DECLARE
