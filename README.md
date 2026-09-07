@@ -30,3 +30,12 @@ Enjoy zero-prompt Alpha Sniper cockpit automation.
 - Missing mandatory evidence fails closed / **DATA BLOCKED**.
 - Deployment requires explicit user approval.
 - Current experimental branches must not be merged automatically.
+
+### Historical migration warning
+
+> **DO NOT REPLAY — SUPERSEDED BY VERIFIED PRODUCTION HARDENING.**
+>
+> The older [20260905_alpha_preopen_lock_v1.sql](https://github.com/drrohanvirani/alpha-sniper-cockpit/blob/dea66682f7b1a4c3504e0042ec96e6186b5826dc/supabase/migrations/20260905_alpha_preopen_lock_v1.sql)
+> on `alpha-preopen-lock-v1` is **SUPERSEDED / DO NOT REPLAY against production**.
+> See [Production Reconciliation — 2026-09-07](docs/PRODUCTION_RECONCILIATION_20260907.md)
+> for owner-verified production facts, GitHub facts and open risks.
