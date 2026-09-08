@@ -1,9 +1,11 @@
-openai==0.28
-
 streamlit
+openai>=1.40.0
 pandas
 numpy
 openpyxl
 pytesseract
 Pillow
 pyngrok
+fastapi
+uvicorn
+httpx
