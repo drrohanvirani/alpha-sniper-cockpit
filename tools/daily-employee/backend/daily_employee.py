@@ -46,6 +46,31 @@ def number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def telegram_evidence(packet, captured):
+    """Separate ingestion, research links and primary verification."""
+    source = packet.get('telegram')
+    if not isinstance(source, dict):
+        return {'status': 'NOT_VERIFIED', 'capital_authority': False}
+    run = source.get('latest_processing_run') or {}
+    linked = source.get('linked_evidence') or {}
+    for field in ['distilled_items', 'items_linked_to_intel',
+                  'distinct_intel_events', 'primary_verified_intel_events']:
+        value = linked.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError('invalid Telegram evidence counts')
+    if not (linked['primary_verified_intel_events'] <= linked['distinct_intel_events']
+            <= linked['items_linked_to_intel'] <= linked['distilled_items']):
+        raise ValueError('inconsistent Telegram evidence counts')
+    for value in [run.get('started_at'), run.get('completed_at'), linked.get('last_item_at')]:
+        if value is not None and timestamp(value) > captured:
+            raise ValueError('future Telegram evidence rejected')
+    completed = run.get('status') == 'COMPLETED' and run.get('completed_at') is not None
+    return {'status': 'PROCESSING_EVIDENCE_PRESENT' if completed else 'PROCESSING_NOT_CONFIRMED',
+            'latest_processing_run': run, 'linked_evidence': linked,
+            'capital_authority': False, 'autonomous_end_to_end_verified': False,
+            'count_note': 'Linked items may share an intel event; reposts are not independent confirmations.'}
+
+
 def build_report(packet, sources, memberships, now=None):
     if packet.get('schema_version') != 'ALPHA_EMPLOYEE_INPUT_V1':
         raise ValueError('unsupported input schema')
@@ -123,6 +148,7 @@ def build_report(packet, sources, memberships, now=None):
         'portfolio_and_cash': holdings, 'broker_sync': broker,
         'tournament': tournament, 'session_lock': packet['session_lock'],
         'worker_attempt': worker, 'learning_event': packet['learning_event'],
+        'telegram': telegram_evidence(packet, captured),
         'curiosity': packet['curiosity'], 'blocked_reasons': sorted(set(blocked)),
         'performance': {'status': 'DATA_BLOCKED', 'twr': None, 'benchmark_return': None,
                         'excess_return': None, 'selection_vs_allocation': None},
@@ -156,3 +182,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

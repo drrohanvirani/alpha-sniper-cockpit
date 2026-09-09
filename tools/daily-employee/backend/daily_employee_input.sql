@@ -40,6 +40,24 @@ SELECT jsonb_build_object(
    'overdue_unanswered',count(*) FILTER(WHERE answered_at IS NULL AND deadline_at<=now()
      AND status IN ('OPEN','ACKNOWLEDGED')))
    FROM public.alpha_autonomy_queue WHERE contract_version='AWARENESS_CURIOSITY_V1'),
+ 'telegram',jsonb_build_object(
+   'latest_processing_run',(SELECT to_jsonb(x) FROM
+     (SELECT run_id,started_at,completed_at,source_selected,material_items,
+       rejected_items,verification_queue_items,status
+      FROM public.alpha_intel_distillation_runs ORDER BY started_at DESC,run_id DESC LIMIT 1)x),
+   'linked_evidence',(SELECT jsonb_build_object(
+      'distilled_items',count(*),
+      'items_linked_to_intel',count(*) FILTER(WHERE e.id IS NOT NULL),
+      'distinct_intel_events',count(DISTINCT e.id),
+      'primary_verified_intel_events',count(DISTINCT e.id) FILTER(WHERE e.primary_verified),
+      'last_item_at',max(i.created_at))
+    FROM public.alpha_intel_distillation_items i
+    LEFT JOIN public.alpha_intel_events e ON e.id=i.intel_event_id
+    WHERE i.source_event_type ILIKE '%TELEGRAM%'),
+   'triage',(SELECT coalesce(jsonb_agg(x),'[]'::jsonb) FROM
+     (SELECT classification,count(*) AS items,max(classified_at) AS last_classified_at
+      FROM public.alpha_signal_triage WHERE source_name='TELEGRAM'
+      GROUP BY classification ORDER BY classification)x)),
  'session_lock',(SELECT jsonb_build_object('trade_date',trade_date,'status',status,
    'lock_id',lock_id,'capital_owner_ticker',capital_owner_ticker,
    'executed_route_id',executed_route_id)

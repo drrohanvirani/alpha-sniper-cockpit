@@ -76,4 +76,29 @@ class ReportTests(unittest.TestCase):
         self.assertIn('BROKER_CASH_MISSING', report['blocked_reasons'])
 
 
+    def test_telegram_reposts_are_not_verified_confirmations(self):
+        self.packet['telegram'] = {
+            'latest_processing_run': {'status': 'COMPLETED', 'completed_at': '2026-09-09T06:50:00Z'},
+            'linked_evidence': {'distilled_items': 50, 'items_linked_to_intel': 10,
+                               'distinct_intel_events': 2, 'primary_verified_intel_events': 0}}
+        result = self.build()['telegram']
+        self.assertEqual(result['status'], 'PROCESSING_EVIDENCE_PRESENT')
+        self.assertEqual(result['linked_evidence']['primary_verified_intel_events'], 0)
+        self.assertFalse(result['autonomous_end_to_end_verified'])
+        self.assertFalse(result['capital_authority'])
+        self.packet['telegram']['linked_evidence']['primary_verified_intel_events'] = 3
+        with self.assertRaises(ValueError): self.build()
+
+    def test_missing_telegram_is_not_live(self):
+        self.assertEqual(self.build()['telegram']['status'], 'NOT_VERIFIED')
+
+    def test_future_telegram_is_rejected(self):
+        self.packet['telegram'] = {
+            'latest_processing_run': {'completed_at': '2026-09-10T07:00:00Z'},
+            'linked_evidence': {'distilled_items': 0, 'items_linked_to_intel': 0,
+                               'distinct_intel_events': 0, 'primary_verified_intel_events': 0}}
+        with self.assertRaises(ValueError): self.build()
+
+
 if __name__ == '__main__': unittest.main()
+
