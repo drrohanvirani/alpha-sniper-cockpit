@@ -31,9 +31,12 @@ verify the IPO date or historical investability of that symbol.
 
 python -m unittest discover -s backend -p "test_*.py" -v
 
-Six isolated tests cover duplicate memberships, exchange identity, future evidence,
+Nine isolated tests cover duplicate memberships, exchange identity, future evidence,
 wrong project/mixed census dates, deterministic output and state preservation,
-missing cash, no fabricated performance/authority, and latest-worker failure.
+missing cash, no fabricated performance/authority, latest-worker failure, and
+Telegram evidence integrity. Telegram linked items, distinct intel events, and
+primary-verified events are separate counts. Reposts do not become independent
+confirmations; missing/future/inconsistent Telegram evidence fails validation.
 
 ## Verified on 2026-09-09
 
@@ -53,8 +56,8 @@ Current worker failures include deadlocks in portfolio_campaign_targets.
 ## Remaining integration boundary
 
 This commit does not deploy, schedule, change cron, publish to Telegram, or change
-ChatGPT tools. Production ownership must be coordinated with the other active
-session, and routine production deployment must occur outside market hours per
+ChatGPT tools. The user confirmed ChatGPT Work Mode has stopped production changes and this
+task owns implementation. Routine production deployment must occur outside market hours per
 AGENTS.md. After that, integration must use the existing persistence/delivery
 path and demonstrate a saved record ID, independent read-back, scheduler run ID
 and mobile retrieval. A successful Python test alone does not satisfy those.
@@ -62,3 +65,4 @@ and mobile retrieval. A successful Python test alone does not satisfy those.
 Chartink's URL is known but automated capture and current filter interpretation
 are not established by these stock exports. Pro-Setups website login is lower
 priority. No subscriptions or access permissions were changed.
+
