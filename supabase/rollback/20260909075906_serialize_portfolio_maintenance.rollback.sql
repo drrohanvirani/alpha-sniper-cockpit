@@ -1,32 +1,23 @@
--- Prepared only. Stage 2 real fix; do not deploy without explicit approval.
--- Production baselines captured 2026-09-09 after Stage 1 schedule mitigation.
+-- Stage 2 rollback only. Review before any production execution.
+BEGIN;
 DO $preflight$
 DECLARE r record; v_job record;
 BEGIN
-  IF to_regprocedure('public.alpha_run_portfolio_maintenance_serialized(text)') IS NOT NULL THEN
-    RAISE EXCEPTION 'SERIALIZED_WRAPPER_ALREADY_EXISTS_RECONCILE_FIRST';
-  END IF;
-  IF md5(pg_get_functiondef(to_regprocedure('public.alpha_winner_protection_tick()')))
-       IS DISTINCT FROM 'f608371d304563ed317cca5ea4672690' THEN
-    RAISE EXCEPTION 'PRODUCTION_FUNCTION_DRIFT: alpha_winner_protection_tick';
+  IF to_regprocedure('public.alpha_run_portfolio_maintenance_serialized(text)') IS NULL THEN
+    RAISE EXCEPTION 'SERIALIZED_WRAPPER_NOT_INSTALLED';
   END IF;
   FOR r IN SELECT * FROM (VALUES
-('alpha-autonomy-heartbeat-30m','alpha_autonomy_heartbeat','10,40 3-11 * * 1-5','c0ab550b00425842f7cb4eb855d34fbb'),
-('alpha-autonomous-worker-15m','alpha_autonomous_worker_tick_v7','3,18,33,48 * * * *','20a413a75ee5e66933e7f90acebb1368'),
-('alpha-ground-truth-liveness-5m','alpha_liveness_guard_tick','*/5 3-10 * * 1-5','2f7890e7d7c36352492ad2612a43d803'),
-('alpha-master-daily-sop','alpha_master_daily_sop_tick','*/5 * * * *','0e3baf7a6896255e2d98c38efcc79e81')
-  ) AS expected(job_name,function_name,schedule,body_hash)
+    ('alpha-autonomy-heartbeat-30m','heartbeat'),
+    ('alpha-autonomous-worker-15m','worker'),
+    ('alpha-ground-truth-liveness-5m','liveness'),
+    ('alpha-master-daily-sop','daily_sop')
+  ) AS expected(job_name,entry_key)
   LOOP
-    IF md5(pg_get_functiondef(to_regprocedure('public.'||r.function_name||'()'))) IS DISTINCT FROM r.body_hash THEN
-      RAISE EXCEPTION 'PRODUCTION_FUNCTION_DRIFT: %',r.function_name;
-    END IF;
     SELECT * INTO STRICT v_job FROM cron.job WHERE jobname=r.job_name;
-    IF v_job.command IS DISTINCT FROM 'select public.'||r.function_name||'();'
-       OR v_job.schedule IS DISTINCT FROM r.schedule
-       OR v_job.username IS DISTINCT FROM 'postgres'
-       OR v_job.database IS DISTINCT FROM 'postgres'
+    IF v_job.command IS DISTINCT FROM format(
+      'select public.alpha_run_portfolio_maintenance_serialized(%L);',r.entry_key)
        OR NOT v_job.active THEN
-      RAISE EXCEPTION 'CRON_BASELINE_DRIFT: %',r.job_name;
+      RAISE EXCEPTION 'ROLLBACK_CRON_DRIFT: %',r.job_name;
     END IF;
   END LOOP;
 END
@@ -64,14 +55,10 @@ declare
   v_old_state text;
   v_changed boolean;
 begin
-  -- Shared gate also protects direct invocations outside the scheduled wrappers.
-  PERFORM pg_advisory_xact_lock(1095520328,1);
-
   for r in
     select ticker,quantity,avg_price,current_price,portfolio_weight,snapshot_at
     from public.live_portfolio
     where quantity>0 and avg_price>0 and current_price>0
-    order by upper(replace(ticker,'-BE','')),ticker
   loop
     v_count := v_count + 1;
     v_campaign_start := null;
@@ -222,7 +209,6 @@ AS $function$
 declare
   v_base jsonb; v_phase text; v_agenda jsonb := '{}'::jsonb; v_compress jsonb := '{}'::jsonb;
   v_mission jsonb := '{}'::jsonb; v_win jsonb; v_evo jsonb; v_delivery jsonb; v_run_id bigint;
-  v_win_attempt integer;
 begin
   v_base := public.alpha_autonomous_worker_tick_v4();
   v_phase := coalesce(v_base->>'phase','UNKNOWN');
@@ -234,23 +220,7 @@ begin
     v_agenda := jsonb_build_object('status','SUPPRESSED_MARKET_HOURS','reason','LOCKED_CAPITAL_PLAN_ONLY');
     v_mission := jsonb_build_object('status','SUPPRESSED_MARKET_HOURS','reason','NO_INTRADAY_CAPITAL_RERANKING');
   end if;
-  -- Keep unrelated delivery/evolution work alive if winner protection exhausts retries.
-  FOR v_win_attempt IN 1..3 LOOP
-    BEGIN
-      v_win := public.alpha_winner_protection_tick();
-      EXIT;
-    EXCEPTION WHEN deadlock_detected THEN
-      RAISE WARNING 'ALPHA_WINNER_PROTECTION_DEADLOCK_RETRY attempt=% max=3',v_win_attempt;
-      IF v_win_attempt=3 THEN
-        v_win := jsonb_build_object(
-          'ok',false,'status','FAILED_DEADLOCK_RETRIES_EXHAUSTED',
-          'attempts',v_win_attempt,'sqlstate',SQLSTATE,'error',SQLERRM
-        );
-      ELSE
-        PERFORM pg_sleep(0.05*v_win_attempt);
-      END IF;
-    END;
-  END LOOP;
+  v_win := public.alpha_winner_protection_tick();
   v_delivery := public.alpha_delivery_gate_tick();
   v_evo := public.alpha_evolution_governor_tick();
   v_run_id := nullif(v_base->>'run_id','')::bigint;
@@ -274,54 +244,13 @@ end
 $function$
 ;
 
-CREATE FUNCTION public.alpha_run_portfolio_maintenance_serialized(p_job text)
-RETURNS jsonb
-LANGUAGE plpgsql
-SECURITY INVOKER
-SET search_path TO 'public','pg_temp'
-AS $function$
-DECLARE
-  v_attempt integer;
-BEGIN
-  IF p_job IS NULL OR p_job NOT IN ('heartbeat','worker','liveness','daily_sop') THEN
-    RAISE EXCEPTION 'UNKNOWN_PORTFOLIO_MAINTENANCE_JOB' USING ERRCODE='22023';
-  END IF;
-  PERFORM pg_advisory_xact_lock(1095520328,1);
-  FOR v_attempt IN 1..3 LOOP
-    BEGIN
-      CASE p_job
-        WHEN 'heartbeat' THEN RETURN public.alpha_autonomy_heartbeat();
-        WHEN 'worker' THEN RETURN public.alpha_autonomous_worker_tick_v7();
-        WHEN 'liveness' THEN RETURN public.alpha_liveness_guard_tick();
-        WHEN 'daily_sop' THEN RETURN public.alpha_master_daily_sop_tick();
-      END CASE;
-    EXCEPTION WHEN deadlock_detected THEN
-      RAISE WARNING 'ALPHA_PORTFOLIO_MAINTENANCE_DEADLOCK_RETRY job=% attempt=% max=3',
-        p_job,v_attempt;
-      IF v_attempt=3 THEN RAISE; END IF;
-      PERFORM pg_sleep(0.05*v_attempt);
-    END;
-  END LOOP;
-  RAISE EXCEPTION 'UNREACHABLE_PORTFOLIO_MAINTENANCE_STATE';
-END
-$function$;
-REVOKE ALL ON FUNCTION public.alpha_run_portfolio_maintenance_serialized(text) FROM PUBLIC,anon,authenticated;
-GRANT EXECUTE ON FUNCTION public.alpha_run_portfolio_maintenance_serialized(text) TO postgres,service_role;
-
-DO $schedule$
-DECLARE r record; v_id bigint;
-BEGIN
-  FOR r IN SELECT * FROM (VALUES
-('alpha-autonomy-heartbeat-30m','heartbeat'),
-('alpha-autonomous-worker-15m','worker'),
-('alpha-ground-truth-liveness-5m','liveness'),
-('alpha-master-daily-sop','daily_sop')
-  ) AS jobs(job_name,entry_key)
-  LOOP
-    SELECT jobid INTO STRICT v_id FROM cron.job WHERE jobname=r.job_name;
-    PERFORM cron.alter_job(v_id,command:=format(
-      'select public.alpha_run_portfolio_maintenance_serialized(%L);',r.entry_key));
-  END LOOP;
-END
-$schedule$;
-
+SELECT cron.alter_job(jobid,command:='select public.alpha_autonomy_heartbeat();')
+FROM cron.job WHERE jobname='alpha-autonomy-heartbeat-30m';
+SELECT cron.alter_job(jobid,command:='select public.alpha_autonomous_worker_tick_v7();')
+FROM cron.job WHERE jobname='alpha-autonomous-worker-15m';
+SELECT cron.alter_job(jobid,command:='select public.alpha_liveness_guard_tick();')
+FROM cron.job WHERE jobname='alpha-ground-truth-liveness-5m';
+SELECT cron.alter_job(jobid,command:='select public.alpha_master_daily_sop_tick();')
+FROM cron.job WHERE jobname='alpha-master-daily-sop';
+DROP FUNCTION public.alpha_run_portfolio_maintenance_serialized(text);
+COMMIT;

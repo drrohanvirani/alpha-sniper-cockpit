@@ -12,7 +12,7 @@ BASE = [str(PSQL), '-X', '-qAt', '-v', 'ON_ERROR_STOP=1',
 DB = 'alpha_serialization_test'
 JOBS = {
  'heartbeat': ('alpha-autonomy-heartbeat-30m','alpha_autonomy_heartbeat','10,40 3-11 * * 1-5'),
- 'worker': ('alpha-autonomous-worker-15m','alpha_autonomous_worker_tick_v7','*/15 * * * *'),
+ 'worker': ('alpha-autonomous-worker-15m','alpha_autonomous_worker_tick_v7','3,18,33,48 * * * *'),
  'liveness': ('alpha-ground-truth-liveness-5m','alpha_liveness_guard_tick','*/5 3-10 * * 1-5'),
  'daily_sop': ('alpha-master-daily-sop','alpha_master_daily_sop_tick','*/5 * * * *')}
 EVIDENCE = []
@@ -71,14 +71,67 @@ class NativeTests(unittest.TestCase):
         for i,(key,(name,fn,schedule)) in enumerate(JOBS.items(),1):
             run(f"INSERT INTO cron.job VALUES({i},'{name}','{schedule}','select public.{fn}();','postgres','postgres',true);")
             run((ROOT/'supabase/tests/baseline'/f'{fn}.sql').read_text())
+        run((ROOT/'supabase/tests/baseline/alpha_winner_protection_tick.sql').read_text())
         cls.hash_query = "SELECT jsonb_object_agg(proname,md5(pg_get_functiondef(oid))) FROM pg_proc WHERE pronamespace='public'::regnamespace;"
         before=json.loads(run(cls.hash_query).stdout)
         cls.metadata=run("SELECT jsonb_agg(jsonb_build_array(jobid,jobname,schedule,database,username,active) ORDER BY jobid) FROM cron.job;").stdout
         cls.migration=(ROOT/'supabase/migrations/20260909075906_serialize_portfolio_maintenance.sql').read_text()
         run('BEGIN;'+cls.migration+'COMMIT;')
         after=json.loads(run(cls.hash_query).stdout)
-        assert all(after[k]==v for k,v in before.items()), 'existing bodies changed'
-        EVIDENCE.append({'case':'migration_preserves_existing_function_hashes','status':'PASS','hashes':before})
+        for fn in ('alpha_autonomy_heartbeat','alpha_liveness_guard_tick','alpha_master_daily_sop_tick'):
+            assert after[fn]==before[fn], fn+' changed unexpectedly'
+        assert after['alpha_autonomous_worker_tick_v7']!=before['alpha_autonomous_worker_tick_v7']
+        assert after['alpha_winner_protection_tick']!=before['alpha_winner_protection_tick']
+        winner_def=run("SELECT pg_get_functiondef('public.alpha_winner_protection_tick()'::regprocedure);").stdout
+        worker_def=run("SELECT pg_get_functiondef('public.alpha_autonomous_worker_tick_v7()'::regprocedure);").stdout
+        assert "pg_advisory_xact_lock(1095520328,1)" in winner_def
+        assert "order by upper(replace(ticker,'-BE','')),ticker" in winner_def
+        assert 'FAILED_DEADLOCK_RETRIES_EXHAUSTED' in worker_def
+        assert 'ALPHA_WINNER_PROTECTION_DEADLOCK_RETRY' in worker_def
+        EVIDENCE.append({'case':'scoped_function_changes','status':'PASS',
+          'unchanged':['alpha_autonomy_heartbeat','alpha_liveness_guard_tick','alpha_master_daily_sop_tick'],
+          'changed':['alpha_winner_protection_tick','alpha_autonomous_worker_tick_v7'],
+          'deterministic_ticker_order':True,'direct_advisory_gate':True,
+          'worker_bounded_retry_and_fail_soft':True})
+
+        run("""CREATE TABLE blast_radius_calls(stage text);
+        CREATE SEQUENCE test_deadlock_seq;
+        CREATE OR REPLACE FUNCTION public.alpha_autonomous_worker_tick_v4() RETURNS jsonb
+          LANGUAGE sql AS $$ SELECT '{"phase":"MARKET_HOURS"}'::jsonb $$;
+        CREATE OR REPLACE FUNCTION public.alpha_winner_protection_tick() RETURNS jsonb
+          LANGUAGE plpgsql AS $$ BEGIN
+            PERFORM nextval('test_deadlock_seq');
+            RAISE EXCEPTION 'FORCED_DEADLOCK' USING ERRCODE='40P01';
+          END $$;
+        CREATE OR REPLACE FUNCTION public.alpha_delivery_gate_tick() RETURNS jsonb
+          LANGUAGE plpgsql AS $$ BEGIN INSERT INTO blast_radius_calls VALUES('delivery');
+            RETURN '{"delivery":"continued"}'::jsonb; END $$;
+        CREATE OR REPLACE FUNCTION public.alpha_evolution_governor_tick() RETURNS jsonb
+          LANGUAGE plpgsql AS $$ BEGIN INSERT INTO blast_radius_calls VALUES('evolution');
+            RETURN '{"evolution":"continued"}'::jsonb; END $$;
+        """)
+        blast=json.loads(run("SELECT public.alpha_autonomous_worker_tick_v7();").stdout)
+        assert blast['winner_protection']['status']=='FAILED_DEADLOCK_RETRIES_EXHAUSTED'
+        assert blast['winner_protection']['attempts']==3
+        assert blast['delivery_gate']=={'delivery':'continued'}
+        assert blast['evolution_governor']=={'evolution':'continued'}
+        assert run("SELECT count(*) FROM blast_radius_calls;").stdout.strip()=='2'
+        EVIDENCE.append({'case':'worker_deadlock_blast_radius','status':'PASS',
+          'winner_attempts':3,'delivery_continued':True,'evolution_continued':True})
+
+        run("""CREATE SEQUENCE test_wrapper_retry_seq;
+        CREATE OR REPLACE FUNCTION public.alpha_autonomy_heartbeat() RETURNS jsonb
+          LANGUAGE plpgsql AS $$ BEGIN
+            IF nextval('test_wrapper_retry_seq')=1 THEN
+              RAISE EXCEPTION 'FORCED_DEADLOCK' USING ERRCODE='40P01';
+            END IF;
+            RETURN '{"status":"RETRIED_OK"}'::jsonb;
+          END $$;""")
+        retry=json.loads(run("SELECT public.alpha_run_portfolio_maintenance_serialized('heartbeat');").stdout)
+        assert retry=={'status':'RETRIED_OK'}
+        assert run("SELECT last_value FROM test_wrapper_retry_seq;").stdout.strip()=='2'
+        EVIDENCE.append({'case':'bounded_deadlock_retry','status':'PASS','attempts':2})
+
         run("""CREATE TABLE test_queue(id int primary key, n int); INSERT INTO test_queue VALUES(1,0);
         CREATE TABLE test_targets(id int primary key,n int); INSERT INTO test_targets VALUES(1,0);
         CREATE TABLE test_calls(job text);
