@@ -1,0 +1,381 @@
+{
+  "passed": true,
+  "tests": 7,
+  "evidence": [
+    {
+      "case": "scoped_function_changes",
+      "status": "PASS",
+      "unchanged": [
+        "alpha_autonomy_heartbeat",
+        "alpha_liveness_guard_tick",
+        "alpha_master_daily_sop_tick"
+      ],
+      "changed": [
+        "alpha_winner_protection_tick",
+        "alpha_autonomous_worker_tick_v7"
+      ],
+      "deterministic_ticker_order": true,
+      "direct_advisory_gate": true,
+      "worker_bounded_retry_and_fail_soft": true
+    },
+    {
+      "case": "worker_deadlock_blast_radius",
+      "status": "PASS",
+      "winner_attempts": 3,
+      "delivery_continued": true,
+      "evolution_continued": true,
+      "overall_ok": false,
+      "persisted_worker_status": "ERROR"
+    },
+    {
+      "case": "worker_success_status_preserved",
+      "status": "PASS"
+    },
+    {
+      "case": "bounded_deadlock_retry",
+      "status": "PASS",
+      "attempts": 2
+    },
+    {
+      "server_version_num": "170011",
+      "production_touched": false,
+      "scope": "native wrapper concurrency, existing bodies hash preservation; downstream functions stubbed"
+    },
+    {
+      "case": "heartbeat/heartbeat",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 40416,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          67880
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "heartbeat/worker",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 68024,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          65680
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "heartbeat/liveness",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 66424,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          65432
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "heartbeat/daily_sop",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 48120,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          60592
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "worker/heartbeat",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 53560,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          65484
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "worker/worker",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 63568,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          56968
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "worker/liveness",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 68756,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          68740
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "worker/daily_sop",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 69068,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          69052
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "liveness/heartbeat",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 69360,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          69336
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "liveness/worker",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 65648,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          69620
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "liveness/liveness",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 68912,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          68900
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "liveness/daily_sop",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 69220,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          69032
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "daily_sop/heartbeat",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 69556,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          69384
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "daily_sop/worker",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 68820,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          68848
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "daily_sop/liveness",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 69252,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          65332
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "daily_sop/daily_sop",
+      "rollback": false,
+      "status": "PASS",
+      "wait": {
+        "pid": 55676,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          69572
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "case": "worker/daily_sop",
+      "rollback": true,
+      "status": "PASS",
+      "wait": {
+        "pid": 69256,
+        "wait_event": "advisory",
+        "blocking_pids": [
+          64404
+        ],
+        "wait_event_type": "Lock",
+        "ungranted_advisory_lock": true
+      },
+      "counts": [
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "case": "negative_control_without_gate",
+      "status": "PASS",
+      "expected_deadlock_reproduced": true,
+      "wait": {
+        "pid": 68896,
+        "wait_event": "transactionid",
+        "blocking_pids": [
+          68636
+        ],
+        "wait_event_type": "Lock"
+      }
+    }
+  ]
+}

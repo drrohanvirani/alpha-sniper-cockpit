@@ -1,0 +1,337 @@
+-- Prepared only. Stage 2 real fix; do not deploy without explicit approval.
+-- Production baselines captured 2026-09-09 after Stage 1 schedule mitigation.
+DO $preflight$
+DECLARE r record; v_job record;
+BEGIN
+  IF to_regprocedure('public.alpha_run_portfolio_maintenance_serialized(text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'SERIALIZED_WRAPPER_ALREADY_EXISTS_RECONCILE_FIRST';
+  END IF;
+  IF md5(pg_get_functiondef(to_regprocedure('public.alpha_winner_protection_tick()')))
+       IS DISTINCT FROM 'f608371d304563ed317cca5ea4672690' THEN
+    RAISE EXCEPTION 'PRODUCTION_FUNCTION_DRIFT: alpha_winner_protection_tick';
+  END IF;
+  FOR r IN SELECT * FROM (VALUES
+('alpha-autonomy-heartbeat-30m','alpha_autonomy_heartbeat','10,40 3-11 * * 1-5','c0ab550b00425842f7cb4eb855d34fbb'),
+('alpha-autonomous-worker-15m','alpha_autonomous_worker_tick_v7','3,18,33,48 * * * *','20a413a75ee5e66933e7f90acebb1368'),
+('alpha-ground-truth-liveness-5m','alpha_liveness_guard_tick','*/5 3-10 * * 1-5','2f7890e7d7c36352492ad2612a43d803'),
+('alpha-master-daily-sop','alpha_master_daily_sop_tick','*/5 * * * *','0e3baf7a6896255e2d98c38efcc79e81')
+  ) AS expected(job_name,function_name,schedule,body_hash)
+  LOOP
+    IF md5(pg_get_functiondef(to_regprocedure('public.'||r.function_name||'()'))) IS DISTINCT FROM r.body_hash THEN
+      RAISE EXCEPTION 'PRODUCTION_FUNCTION_DRIFT: %',r.function_name;
+    END IF;
+    SELECT * INTO STRICT v_job FROM cron.job WHERE jobname=r.job_name;
+    IF v_job.command IS DISTINCT FROM 'select public.'||r.function_name||'();'
+       OR v_job.schedule IS DISTINCT FROM r.schedule
+       OR v_job.username IS DISTINCT FROM 'postgres'
+       OR v_job.database IS DISTINCT FROM 'postgres'
+       OR NOT v_job.active THEN
+      RAISE EXCEPTION 'CRON_BASELINE_DRIFT: %',r.job_name;
+    END IF;
+  END LOOP;
+END
+$preflight$;
+
+CREATE OR REPLACE FUNCTION public.alpha_winner_protection_tick()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  r record;
+  v_tradebook_balance numeric;
+  v_campaign_start date;
+  v_peak numeric;
+  v_peak_hist numeric;
+  v_peak_obs numeric;
+  v_peak_gain numeric;
+  v_current_gain numeric;
+  v_drawdown numeric;
+  v_giveback numeric;
+  v_sma10 numeric;
+  v_sma20 numeric;
+  v_sma50 numeric;
+  v_vol_ratio numeric;
+  v_ret5 numeric;
+  v_baseline text;
+  v_state text;
+  v_priority int;
+  v_queue_key text;
+  v_count int := 0;
+  v_watch int := 0;
+  v_review int := 0;
+  v_urgent int := 0;
+  v_old_state text;
+  v_changed boolean;
+begin
+  -- Shared gate also protects direct invocations outside the scheduled wrappers.
+  PERFORM pg_advisory_xact_lock(1095520328,1);
+
+  for r in
+    select ticker,quantity,avg_price,current_price,portfolio_weight,snapshot_at
+    from public.live_portfolio
+    where quantity>0 and avg_price>0 and current_price>0
+    order by upper(replace(ticker,'-BE','')),ticker
+  loop
+    v_count := v_count + 1;
+    v_campaign_start := null;
+    v_tradebook_balance := null;
+
+    select coalesce(sum(case when upper(trade_type) in ('BUY','B') then quantity when upper(trade_type) in ('SELL','S') then -quantity else 0 end),0)
+      into v_tradebook_balance
+    from public.zerodha_tradebook_fills
+    where upper(replace(symbol,'-BE',''))=upper(replace(r.ticker,'-BE',''));
+
+    if abs(coalesce(v_tradebook_balance,0)-r.quantity) < 0.001 and v_tradebook_balance>0 then
+      with d as (
+        select trade_date,
+               sum(case when upper(trade_type) in ('BUY','B') then quantity when upper(trade_type) in ('SELL','S') then -quantity else 0 end) net_qty
+        from public.zerodha_tradebook_fills
+        where upper(replace(symbol,'-BE',''))=upper(replace(r.ticker,'-BE',''))
+        group by trade_date
+      ), x as (
+        select trade_date,sum(net_qty) over(order by trade_date rows unbounded preceding) bal
+        from d
+      ), z as (
+        select max(trade_date) filter(where bal=0) last_zero from x
+      )
+      select min(x.trade_date) into v_campaign_start
+      from x cross join z
+      where x.trade_date>coalesce(z.last_zero,date '1900-01-01') and x.bal>0;
+      v_baseline := case when v_campaign_start is not null then 'HIGH_TRADEBOOK_MATCH' else 'PARTIAL_PROSPECTIVE' end;
+    else
+      v_baseline := 'PARTIAL_PROSPECTIVE';
+    end if;
+
+    v_peak_hist := null;
+    if v_campaign_start is not null then
+      select max(high) into v_peak_hist
+      from public.trade_audit_market_cache
+      where upper(replace(ticker,'-BE',''))=upper(replace(r.ticker,'-BE',''))
+        and candle_date>=v_campaign_start;
+    end if;
+
+    select max(current_price) into v_peak_obs
+    from public.alpha_market_observations
+    where upper(replace(ticker,'-BE',''))=upper(replace(r.ticker,'-BE',''))
+      and (v_campaign_start is null or (observed_at at time zone 'Asia/Kolkata')::date>=v_campaign_start);
+
+    v_peak := greatest(r.current_price,coalesce(v_peak_hist,r.current_price),coalesce(v_peak_obs,r.current_price));
+    v_peak_gain := 100*(v_peak/r.avg_price-1);
+    v_current_gain := 100*(r.current_price/r.avg_price-1);
+    v_drawdown := 100*(r.current_price/v_peak-1);
+    v_giveback := case when v_peak>r.avg_price and r.current_price<v_peak then 100*(v_peak-r.current_price)/(v_peak-r.avg_price) else 0 end;
+
+    select f.sma10,f.sma20,f.sma50,f.volume_ratio_20d,f.return_5d_pct
+      into v_sma10,v_sma20,v_sma50,v_vol_ratio,v_ret5
+    from public.alpha_market_features f
+    where upper(replace(f.symbol,'-BE',''))=upper(replace(r.ticker,'-BE',''))
+    order by f.trade_date desc limit 1;
+
+    v_state := 'NORMAL';
+    v_priority := 0;
+    if v_peak_gain>=20 and (v_giveback>=60 or v_drawdown<=-12) then
+      v_state := 'URGENT_PROFIT_PROTECTION_REVIEW'; v_priority:=100; v_urgent:=v_urgent+1;
+    elsif v_peak_gain>=15 and (v_giveback>=40 or v_drawdown<=-8) then
+      v_state := 'PROFIT_PROTECTION_REVIEW'; v_priority:=96; v_review:=v_review+1;
+    elsif v_peak_gain>=10 and (v_giveback>=25 or v_drawdown<=-5) then
+      v_state := 'WATCH_GIVEBACK'; v_priority:=84; v_watch:=v_watch+1;
+    end if;
+
+    v_queue_key := 'WINNER_PROTECTION:'||upper(replace(r.ticker,'-BE',''));
+    select evidence->>'state' into v_old_state from public.alpha_autonomy_queue where queue_key=v_queue_key limit 1;
+    v_changed := coalesce(v_old_state,'NORMAL') is distinct from v_state;
+
+    update public.portfolio_campaign_targets pct
+    set execution_plan = coalesce(pct.execution_plan,'{}'::jsonb) || jsonb_build_object(
+          'profit_retention', jsonb_build_object(
+            'state',v_state,
+            'checked_at',now(),
+            'campaign_peak',v_peak,
+            'peak_gain_pct',round(v_peak_gain,2),
+            'current_gain_pct',round(v_current_gain,2),
+            'profit_giveback_pct',round(v_giveback,2),
+            'drawdown_from_peak_pct',round(v_drawdown,2),
+            'sma10',v_sma10,'sma20',v_sma20,'sma50',v_sma50,
+            'requires_preopen_map',v_peak_gain>=10,
+            'required_map_fields',jsonb_build_array('sell_into_strength','sell_into_weakness','hard_fail_safe','post_trim_residual_policy','reentry_criteria'),
+            'intraday_rule',case when v_state='URGENT_PROFIT_PROTECTION_REVIEW' then 'IMMEDIATE_ACTION_REVIEW_NO_SILENT_QUEUE' when v_state='PROFIT_PROTECTION_REVIEW' then 'SAME_SESSION_ACTION_REVIEW' when v_state='WATCH_GIVEBACK' then 'ACTIVE_WATCH' else 'NORMAL' end
+          )
+        ),
+        updated_at=now()
+    where upper(replace(pct.ticker,'-BE',''))=upper(replace(r.ticker,'-BE',''));
+
+    if v_state='NORMAL' then
+      update public.alpha_autonomy_queue
+         set status='RESOLVED',resolved_at=now(),updated_at=now(),
+             answer_evidence=jsonb_build_array(jsonb_build_object('checked_at',now(),'current_price',r.current_price,'peak_reference',v_peak,'peak_gain_pct',round(v_peak_gain,2),'current_gain_pct',round(v_current_gain,2),'drawdown_from_peak_pct',round(v_drawdown,2),'profit_giveback_pct',round(v_giveback,2),'baseline_quality',v_baseline)),
+             answer_conclusion='Winner-protection state returned to NORMAL',
+             decision_impact='No protection action required at this check',
+             answered_at=now(),
+             evidence=coalesce(evidence,'{}'::jsonb)||jsonb_build_object('last_state','NORMAL','checked_at',now(),'current_price',r.current_price,'peak_reference',v_peak,'peak_gain_pct',round(v_peak_gain,2),'current_gain_pct',round(v_current_gain,2),'drawdown_from_peak_pct',round(v_drawdown,2),'profit_giveback_pct',round(v_giveback,2),'baseline_quality',v_baseline)
+       where queue_key=v_queue_key and status='OPEN';
+    else
+      insert into public.alpha_autonomy_queue(queue_key,queue_type,ticker,priority,objective,recommended_next_step,evidence,status,updated_at,origin,generated_by_agent,human_approval_required,user_prompted,delivery_required,delivery_status,delivery_sla_minutes,detected_at)
+      values(
+        v_queue_key,'WINNER_PROTECTION',upper(replace(r.ticker,'-BE','')),v_priority,
+        'Protect an earned winner without mechanically killing the right tail',
+        case
+          when v_state='WATCH_GIVEBACK' then 'ACTIVE WATCH: pre-open map must already contain sell-into-strength and sell-into-weakness paths. Do not let this become a passive HOLD.'
+          when v_state='PROFIT_PROTECTION_REVIEW' then 'SAME-SESSION ACTION REVIEW: compare HOLD FULL vs staged trim using frozen evidence. If the only remaining condition is price, issue/refresh the broker GTT or alert level; do not leave this as an unanswered research item.'
+          else 'URGENT ACTION REVIEW: profit retention has breached the urgent band. Use fresh broker truth and the prewritten fail-safe now. If residual is already near the minimum working weight, choose HOLD FULL or EXIT/ROTATE/CASH; do not create a decorative sub-6% tail.'
+        end,
+        jsonb_build_object(
+          'state',v_state,'checked_at',now(),'snapshot_at',r.snapshot_at,'baseline_quality',v_baseline,'campaign_start',v_campaign_start,
+          'avg_price',r.avg_price,'current_price',r.current_price,'peak_reference',v_peak,
+          'peak_gain_pct',round(v_peak_gain,2),'current_gain_pct',round(v_current_gain,2),'drawdown_from_peak_pct',round(v_drawdown,2),'profit_giveback_pct',round(v_giveback,2),
+          'sma10',v_sma10,'sma20',v_sma20,'sma50',v_sma50,'volume_ratio_20d',v_vol_ratio,'return_5d_pct',v_ret5,
+          'below_sma10',case when v_sma10 is null then null else r.current_price<v_sma10 end,
+          'below_sma20',case when v_sma20 is null then null else r.current_price<v_sma20 end,
+          'principle','Peak/giveback escalates action review; no automatic sell from drawdown alone.',
+          'state_changed',v_changed,
+          'must_not_remain_unanswered',v_state in ('PROFIT_PROTECTION_REVIEW','URGENT_PROFIT_PROTECTION_REVIEW')
+        ),'OPEN',now(),'SYSTEM','AUTONOMOUS_WORKER',true,false,true,'PENDING',case when v_state='URGENT_PROFIT_PROTECTION_REVIEW' then 15 else 30 end,now()
+      )
+      on conflict(queue_key) do update set
+        ticker=excluded.ticker,priority=excluded.priority,objective=excluded.objective,recommended_next_step=excluded.recommended_next_step,
+        evidence=excluded.evidence,status='OPEN',updated_at=now(),resolved_at=null,human_approval_required=true,
+        delivery_required=true,delivery_status=case when public.alpha_autonomy_queue.delivery_status='DELIVERED' and not v_changed then public.alpha_autonomy_queue.delivery_status else 'PENDING' end,
+        delivery_sla_minutes=excluded.delivery_sla_minutes,detected_at=case when v_changed then now() else coalesce(public.alpha_autonomy_queue.detected_at,now()) end,
+        answered_at=case when v_changed then null else public.alpha_autonomy_queue.answered_at end,
+        answer_conclusion=case when v_changed then null else public.alpha_autonomy_queue.answer_conclusion end,
+        decision_impact=case when v_changed then null else public.alpha_autonomy_queue.decision_impact end;
+
+      if v_state in ('PROFIT_PROTECTION_REVIEW','URGENT_PROFIT_PROTECTION_REVIEW') then
+        insert into public.brain_events(event_type,entity_type,entity_key,payload)
+        values('PROFIT_RETENTION_ACTION_REQUIRED','TICKER',upper(replace(r.ticker,'-BE','')),
+          jsonb_build_object('state',v_state,'priority',v_priority,'current_price',r.current_price,'peak',v_peak,'peak_gain_pct',round(v_peak_gain,2),'current_gain_pct',round(v_current_gain,2),'profit_giveback_pct',round(v_giveback,2),'detected_at',now(),'delivery_sla_minutes',case when v_state='URGENT_PROFIT_PROTECTION_REVIEW' then 15 else 30 end));
+      end if;
+    end if;
+  end loop;
+
+  return jsonb_build_object('ok',true,'holdings_checked',v_count,'watch',v_watch,'review',v_review,'urgent',v_urgent,'run_at',now());
+end;
+$function$
+;
+
+CREATE OR REPLACE FUNCTION public.alpha_autonomous_worker_tick_v7()
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+declare
+  v_base jsonb; v_phase text; v_agenda jsonb := '{}'::jsonb; v_compress jsonb := '{}'::jsonb;
+  v_mission jsonb := '{}'::jsonb; v_win jsonb; v_evo jsonb; v_delivery jsonb; v_run_id bigint;
+  v_win_attempt integer;
+begin
+  v_base := public.alpha_autonomous_worker_tick_v4();
+  v_phase := coalesce(v_base->>'phase','UNKNOWN');
+  if v_phase <> 'MARKET_HOURS' then
+    v_agenda := public.alpha_seed_independent_opportunity_agenda(3);
+    v_compress := public.alpha_queue_compress(15);
+    v_mission := public.alpha_mission_control_tick();
+  else
+    v_agenda := jsonb_build_object('status','SUPPRESSED_MARKET_HOURS','reason','LOCKED_CAPITAL_PLAN_ONLY');
+    v_mission := jsonb_build_object('status','SUPPRESSED_MARKET_HOURS','reason','NO_INTRADAY_CAPITAL_RERANKING');
+  end if;
+  -- Keep unrelated delivery/evolution work alive if winner protection exhausts retries.
+  FOR v_win_attempt IN 1..3 LOOP
+    BEGIN
+      v_win := public.alpha_winner_protection_tick();
+      EXIT;
+    EXCEPTION WHEN deadlock_detected THEN
+      RAISE WARNING 'ALPHA_WINNER_PROTECTION_DEADLOCK_RETRY attempt=% max=3',v_win_attempt;
+      IF v_win_attempt=3 THEN
+        v_win := jsonb_build_object(
+          'ok',false,'status','FAILED_DEADLOCK_RETRIES_EXHAUSTED',
+          'attempts',v_win_attempt,'sqlstate',SQLSTATE,'error',SQLERRM
+        );
+      ELSE
+        PERFORM pg_sleep(0.05*v_win_attempt);
+      END IF;
+    END;
+  END LOOP;
+  v_delivery := public.alpha_delivery_gate_tick();
+  v_evo := public.alpha_evolution_governor_tick();
+  v_run_id := nullif(v_base->>'run_id','')::bigint;
+  if v_run_id is not null then
+    update public.alpha_worker_runs set
+      status = case when v_win->>'ok'='false' then 'ERROR' else status end,
+      error_text = case when v_win->>'ok'='false'
+        then 'winner_protection: '||coalesce(v_win->>'status','FAILED')
+        else error_text end,
+      actions = actions
+      || jsonb_build_array(jsonb_build_object('action','independent_opportunity_agenda','result',v_agenda))
+      || jsonb_build_array(jsonb_build_object('action','mission_control','result',v_mission))
+      || jsonb_build_array(jsonb_build_object('action','winner_protection','result',v_win))
+      || jsonb_build_array(jsonb_build_object('action','delivery_gate','result',v_delivery))
+      || jsonb_build_array(jsonb_build_object('action','evolution_governor','result',v_evo))
+    where id=v_run_id;
+  end if;
+  return v_base
+    || case when v_win->>'ok'='false'
+         then jsonb_build_object('ok',false,'status','PARTIAL_FAILURE')
+         else '{}'::jsonb end
+    || jsonb_build_object(
+    'independent_opportunity_agenda',v_agenda,
+    'mission_control',v_mission,
+    'winner_protection',v_win,
+    'delivery_gate',v_delivery,
+    'evolution_governor',v_evo
+  );
+end
+$function$
+;
+
+CREATE FUNCTION public.alpha_run_portfolio_maintenance_serialized(p_job text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path TO 'public','pg_temp'
+AS $function$
+DECLARE
+  v_attempt integer;
+BEGIN
+  IF p_job IS NULL OR p_job NOT IN ('heartbeat','worker','liveness','daily_sop') THEN
+    RAISE EXCEPTION 'UNKNOWN_PORTFOLIO_MAINTENANCE_JOB' USING ERRCODE='22023';
+  END IF;
+  PERFORM pg_advisory_xact_lock(1095520328,1);
+  FOR v_attempt IN 1..3 LOOP
+    BEGIN
+      CASE p_job
+        WHEN 'heartbeat' THEN RETURN public.alpha_autonomy_heartbeat();
+        WHEN 'worker' THEN RETURN public.alpha_autonomous_worker_tick_v7();
+        WHEN 'liveness' THEN RETURN public.alpha_liveness_guard_tick();
+        WHEN 'daily_sop' THEN RETURN public.alpha_master_daily_sop_tick();
+      END CASE;
+    EXCEPTION WHEN deadlock_detected THEN
+      RAISE WARNING 'ALPHA_PORTFOLIO_MAINTENANCE_DEADLOCK_RETRY job=% attempt=% max=3',
+        p_job,v_attempt;
+      IF v_attempt=3 THEN RAISE; END IF;
+      PERFORM pg_sleep(0.05*v_attempt);
+    END;
+  END LOOP;
+  RAISE EXCEPTION 'UNREACHABLE_PORTFOLIO_MAINTENANCE_STATE';
+END
+$function$;
+REVOKE ALL ON FUNCTION public.alpha_run_portfolio_maintenance_serialized(text) FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.alpha_run_portfolio_maintenance_serialized(text) TO postgres,service_role;
+
+DO $schedule$
+DECLARE r record; v_id bigint;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES
+('alpha-autonomy-heartbeat-30m','heartbeat'),
+('alpha-autonomous-worker-15m','worker'),
+('alpha-ground-truth-liveness-5m','liveness'),
+('alpha-master-daily-sop','daily_sop')
+  ) AS jobs(job_name,entry_key)
+  LOOP
+    SELECT jobid INTO STRICT v_id FROM cron.job WHERE jobname=r.job_name;
+    PERFORM cron.alter_job(v_id,command:=format(
+      'select public.alpha_run_portfolio_maintenance_serialized(%L);',r.entry_key));
+  END LOOP;
+END
+$schedule$;
+
+
