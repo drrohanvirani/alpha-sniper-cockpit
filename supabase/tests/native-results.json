@@ -3,14 +3,38 @@
   "tests": 7,
   "evidence": [
     {
-      "case": "migration_preserves_existing_function_hashes",
+      "case": "scoped_function_changes",
       "status": "PASS",
-      "hashes": {
-        "alpha_autonomy_heartbeat": "c0ab550b00425842f7cb4eb855d34fbb",
-        "alpha_liveness_guard_tick": "2f7890e7d7c36352492ad2612a43d803",
-        "alpha_master_daily_sop_tick": "0e3baf7a6896255e2d98c38efcc79e81",
-        "alpha_autonomous_worker_tick_v7": "20a413a75ee5e66933e7f90acebb1368"
-      }
+      "unchanged": [
+        "alpha_autonomy_heartbeat",
+        "alpha_liveness_guard_tick",
+        "alpha_master_daily_sop_tick"
+      ],
+      "changed": [
+        "alpha_winner_protection_tick",
+        "alpha_autonomous_worker_tick_v7"
+      ],
+      "deterministic_ticker_order": true,
+      "direct_advisory_gate": true,
+      "worker_bounded_retry_and_fail_soft": true
+    },
+    {
+      "case": "worker_deadlock_blast_radius",
+      "status": "PASS",
+      "winner_attempts": 3,
+      "delivery_continued": true,
+      "evolution_continued": true,
+      "overall_ok": false,
+      "persisted_worker_status": "ERROR"
+    },
+    {
+      "case": "worker_success_status_preserved",
+      "status": "PASS"
+    },
+    {
+      "case": "bounded_deadlock_retry",
+      "status": "PASS",
+      "attempts": 2
     },
     {
       "server_version_num": "170011",
@@ -22,10 +46,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 60696,
+        "pid": 40416,
         "wait_event": "advisory",
         "blocking_pids": [
-          58748
+          67880
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -41,10 +65,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 61924,
+        "pid": 68024,
         "wait_event": "advisory",
         "blocking_pids": [
-          61848
+          65680
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -60,10 +84,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 62408,
+        "pid": 66424,
         "wait_event": "advisory",
         "blocking_pids": [
-          59920
+          65432
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -79,10 +103,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 60776,
+        "pid": 48120,
         "wait_event": "advisory",
         "blocking_pids": [
-          60040
+          60592
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -98,10 +122,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 60000,
+        "pid": 53560,
         "wait_event": "advisory",
         "blocking_pids": [
-          54224
+          65484
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -117,10 +141,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 60052,
+        "pid": 63568,
         "wait_event": "advisory",
         "blocking_pids": [
-          60620
+          56968
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -136,10 +160,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 53544,
+        "pid": 68756,
         "wait_event": "advisory",
         "blocking_pids": [
-          60712
+          68740
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -155,10 +179,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 62208,
+        "pid": 69068,
         "wait_event": "advisory",
         "blocking_pids": [
-          62212
+          69052
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -174,10 +198,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 53548,
+        "pid": 69360,
         "wait_event": "advisory",
         "blocking_pids": [
-          62428
+          69336
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -193,10 +217,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 57504,
+        "pid": 65648,
         "wait_event": "advisory",
         "blocking_pids": [
-          59364
+          69620
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -212,10 +236,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 57688,
+        "pid": 68912,
         "wait_event": "advisory",
         "blocking_pids": [
-          61552
+          68900
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -231,10 +255,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 57120,
+        "pid": 69220,
         "wait_event": "advisory",
         "blocking_pids": [
-          59636
+          69032
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -250,10 +274,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 57704,
+        "pid": 69556,
         "wait_event": "advisory",
         "blocking_pids": [
-          53540
+          69384
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -269,10 +293,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 58320,
+        "pid": 68820,
         "wait_event": "advisory",
         "blocking_pids": [
-          60524
+          68848
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -288,10 +312,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 59748,
+        "pid": 69252,
         "wait_event": "advisory",
         "blocking_pids": [
-          39536
+          65332
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -307,10 +331,10 @@
       "rollback": false,
       "status": "PASS",
       "wait": {
-        "pid": 59536,
+        "pid": 55676,
         "wait_event": "advisory",
         "blocking_pids": [
-          57964
+          69572
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -326,10 +350,10 @@
       "rollback": true,
       "status": "PASS",
       "wait": {
-        "pid": 58608,
+        "pid": 69256,
         "wait_event": "advisory",
         "blocking_pids": [
-          57432
+          64404
         ],
         "wait_event_type": "Lock",
         "ungranted_advisory_lock": true
@@ -345,10 +369,10 @@
       "status": "PASS",
       "expected_deadlock_reproduced": true,
       "wait": {
-        "pid": 57816,
+        "pid": 68896,
         "wait_event": "transactionid",
         "blocking_pids": [
-          61796
+          68636
         ],
         "wait_event_type": "Lock"
       }

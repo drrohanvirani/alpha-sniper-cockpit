@@ -26,8 +26,10 @@ The parent commit 5db4444 was executed on local PostgreSQL 17.11 (production is 
 - Python compilation, migration-content assertions, and git diff checks: PASS.
 - Heartbeat, liveness, and master-SOP definitions are required to remain byte-identical. Only winner protection and worker v7 may change.
 - The harness now includes deterministic winner ordering/direct gate assertions, forced SQLSTATE 40P01 retry, and three-attempt worker fail-soft continuation checks.
-- Native PostgreSQL rerun of the extended migration: NOT RUN in the current environment because PostgreSQL 17, psql, Docker, and Podman are unavailable.
-- Therefore the extended branch is not merge-ready and no merge approval is requested.
+- Native PostgreSQL rerun of the extended migration and follow-up status correction: PASS on local PostgreSQL 17.11. Seven test methods passed, including the 16 ordered independent-session pairs and native deadlock negative control.
+- Strengthened failure test first FAILED on commit 4248ea8 because exhausted winner protection still returned overall ok=true. The draft now returns ok=false / PARTIAL_FAILURE and persists worker status ERROR with the specific winner failure, while delivery and evolution still run.
+- Exact three-attempt exhaustion, visible retry warnings, successful-worker status preservation, and rollback of the failed retry's side effects: PASS.
+- Full actual downstream integration and the complete competing production batch remain unproven. The passing tests use isolated collaborators. READY_FOR_PRODUCTION = NO pending those checks and the user's separate Stage 2 approval.
 
 Important scope: actual captured function definitions are loaded for migration/hash checks, then isolated failure/counter fixtures exercise retry and concurrency. cron.alter_job is a test double because that PostgreSQL distribution does not contain pg_cron. This is NOT a full Alpha integration or production scheduling rehearsal.
 
@@ -58,4 +60,30 @@ COMMIT;
 The rollback also requires restoring the captured pre-migration definitions of alpha_winner_protection_tick() and alpha_autonomous_worker_tick_v7(). It preserves the Stage 1 3,18,33,48 * * * * schedule. Execute rollback only from a reviewed, complete rollback migration.
 
 References: [PostgreSQL advisory locks](https://www.postgresql.org/docs/17/explicit-locking.html), [Supabase Cron](https://supabase.com/docs/guides/cron/quickstart).
+
+
+## After-close reconciliation, 2026-09-09
+The cloud task advanced this branch to 4248ea8 and changed the live worker schedule
+to 3,18,33,48 * * * * before this follow-up. The prior 5db4444 migration preflight
+was therefore stale and was not applied.
+
+Read-only inspection confirmed four successful worker records at 09:33, 09:48,
+10:03 and 10:18 UTC, each with winner_protection.ok=true and holdings_checked=9.
+The delivery gate still reported FAIL with one breached deadline. This is mitigation
+evidence, not proof of a healthy full daily loop.
+
+A source search across public database functions found sixteen references to
+portfolio_campaign_targets; alpha_winner_protection_tick was the only direct
+writer identified in those function sources. No non-internal table triggers were
+present. This does not establish the absence of external/Edge Function/dynamic SQL writers.
+
+An additional integration risk remains: taking the shared gate only inside
+winner protection cannot prevent a transaction that already owns queue/portfolio
+locks from participating in a gate-versus-row-lock cycle. Scheduled wrappers
+take the gate first, but direct callers and external writers need separate
+rehearsal. Normalized ticker ordering also does not by itself establish physical
+row-lock order if one normalized ticker matches multiple target rows.
+
+No production changes or merges were performed by this after-close continuation.
+The newer user instruction in the cloud task requires Stage 2 to stay branch-only.
 

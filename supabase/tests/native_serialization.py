@@ -95,9 +95,11 @@ class NativeTests(unittest.TestCase):
           'worker_bounded_retry_and_fail_soft':True})
 
         run("""CREATE TABLE blast_radius_calls(stage text);
+        CREATE TABLE public.alpha_worker_runs(id bigint PRIMARY KEY,status text,actions jsonb,error_text text);
+        INSERT INTO public.alpha_worker_runs VALUES(1,'SUCCESS','[]'::jsonb,NULL);
         CREATE SEQUENCE test_deadlock_seq;
         CREATE OR REPLACE FUNCTION public.alpha_autonomous_worker_tick_v4() RETURNS jsonb
-          LANGUAGE sql AS $$ SELECT '{"phase":"MARKET_HOURS"}'::jsonb $$;
+          LANGUAGE sql AS $$ SELECT '{"phase":"MARKET_HOURS","ok":true,"run_id":1}'::jsonb $$;
         CREATE OR REPLACE FUNCTION public.alpha_winner_protection_tick() RETURNS jsonb
           LANGUAGE plpgsql AS $$ BEGIN
             PERFORM nextval('test_deadlock_seq');
@@ -110,24 +112,46 @@ class NativeTests(unittest.TestCase):
           LANGUAGE plpgsql AS $$ BEGIN INSERT INTO blast_radius_calls VALUES('evolution');
             RETURN '{"evolution":"continued"}'::jsonb; END $$;
         """)
-        blast=json.loads(run("SELECT public.alpha_autonomous_worker_tick_v7();").stdout)
+        blast_run=run("SELECT public.alpha_autonomous_worker_tick_v7();")
+        assert blast_run.stderr.count('ALPHA_WINNER_PROTECTION_DEADLOCK_RETRY')==3
+        blast=json.loads(blast_run.stdout)
         assert blast['winner_protection']['status']=='FAILED_DEADLOCK_RETRIES_EXHAUSTED'
         assert blast['winner_protection']['attempts']==3
+        assert blast.get('ok') is False, 'exhausted winner protection must not return overall ok=true'
+        assert run("SELECT status FROM public.alpha_worker_runs WHERE id=1;").stdout.strip()=='ERROR'
+        assert 'FAILED_DEADLOCK_RETRIES_EXHAUSTED' in run("SELECT error_text FROM public.alpha_worker_runs WHERE id=1;").stdout
+        assert run("SELECT last_value FROM test_deadlock_seq;").stdout.strip()=='3'
         assert blast['delivery_gate']=={'delivery':'continued'}
         assert blast['evolution_governor']=={'evolution':'continued'}
         assert run("SELECT count(*) FROM blast_radius_calls;").stdout.strip()=='2'
         EVIDENCE.append({'case':'worker_deadlock_blast_radius','status':'PASS',
-          'winner_attempts':3,'delivery_continued':True,'evolution_continued':True})
+          'winner_attempts':3,'delivery_continued':True,'evolution_continued':True,
+          'overall_ok':False,'persisted_worker_status':'ERROR'})
 
-        run("""CREATE SEQUENCE test_wrapper_retry_seq;
+        run("""CREATE OR REPLACE FUNCTION public.alpha_winner_protection_tick() RETURNS jsonb
+          LANGUAGE sql AS $$ SELECT '{"ok":true,"holdings_checked":2}'::jsonb $$;
+        UPDATE public.alpha_worker_runs SET status='SUCCESS',actions='[]',error_text=NULL WHERE id=1;
+        TRUNCATE blast_radius_calls;""")
+        success=json.loads(run("SELECT public.alpha_autonomous_worker_tick_v7();").stdout)
+        assert success['ok'] is True
+        assert success['winner_protection']['holdings_checked']==2
+        assert run("SELECT status FROM public.alpha_worker_runs WHERE id=1;").stdout.strip()=='SUCCESS'
+        EVIDENCE.append({'case':'worker_success_status_preserved','status':'PASS'})
+
+        run("""CREATE TABLE retry_effects(stage text);
+        CREATE SEQUENCE test_wrapper_retry_seq;
         CREATE OR REPLACE FUNCTION public.alpha_autonomy_heartbeat() RETURNS jsonb
           LANGUAGE plpgsql AS $$ BEGIN
+            INSERT INTO retry_effects VALUES('attempt');
             IF nextval('test_wrapper_retry_seq')=1 THEN
               RAISE EXCEPTION 'FORCED_DEADLOCK' USING ERRCODE='40P01';
             END IF;
             RETURN '{"status":"RETRIED_OK"}'::jsonb;
           END $$;""")
-        retry=json.loads(run("SELECT public.alpha_run_portfolio_maintenance_serialized('heartbeat');").stdout)
+        retry_run=run("SELECT public.alpha_run_portfolio_maintenance_serialized('heartbeat');")
+        assert retry_run.stderr.count('ALPHA_PORTFOLIO_MAINTENANCE_DEADLOCK_RETRY')==1
+        retry=json.loads(retry_run.stdout)
+        assert run("SELECT count(*) FROM retry_effects;").stdout.strip()=='1' 
         assert retry=={'status':'RETRIED_OK'}
         assert run("SELECT last_value FROM test_wrapper_retry_seq;").stdout.strip()=='2'
         EVIDENCE.append({'case':'bounded_deadlock_retry','status':'PASS','attempts':2})
@@ -261,4 +285,5 @@ if __name__=='__main__':
     Path(__file__).with_name('native-results.json').write_text(json.dumps({
         'passed':result.wasSuccessful(),'tests':result.testsRun,'evidence':EVIDENCE},indent=2))
     raise SystemExit(0 if result.wasSuccessful() else 1)
+
 

@@ -255,7 +255,12 @@ begin
   v_evo := public.alpha_evolution_governor_tick();
   v_run_id := nullif(v_base->>'run_id','')::bigint;
   if v_run_id is not null then
-    update public.alpha_worker_runs set actions = actions
+    update public.alpha_worker_runs set
+      status = case when v_win->>'ok'='false' then 'ERROR' else status end,
+      error_text = case when v_win->>'ok'='false'
+        then 'winner_protection: '||coalesce(v_win->>'status','FAILED')
+        else error_text end,
+      actions = actions
       || jsonb_build_array(jsonb_build_object('action','independent_opportunity_agenda','result',v_agenda))
       || jsonb_build_array(jsonb_build_object('action','mission_control','result',v_mission))
       || jsonb_build_array(jsonb_build_object('action','winner_protection','result',v_win))
@@ -263,7 +268,11 @@ begin
       || jsonb_build_array(jsonb_build_object('action','evolution_governor','result',v_evo))
     where id=v_run_id;
   end if;
-  return v_base || jsonb_build_object(
+  return v_base
+    || case when v_win->>'ok'='false'
+         then jsonb_build_object('ok',false,'status','PARTIAL_FAILURE')
+         else '{}'::jsonb end
+    || jsonb_build_object(
     'independent_opportunity_agenda',v_agenda,
     'mission_control',v_mission,
     'winner_protection',v_win,
@@ -324,4 +333,5 @@ BEGIN
   END LOOP;
 END
 $schedule$;
+
 
